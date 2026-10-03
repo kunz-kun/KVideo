@@ -64,6 +64,18 @@ export function VideoPlayer({
   const source = searchParams.get('source') || '';
   const title = searchParams.get('title') || '未知视频';
 
+  const lastPlaybackLogRef = useRef('');
+  const handlePlaybackStarted = useCallback(() => {
+    if (!videoId || !source || !playUrl) return;
+    const key = JSON.stringify([videoId, source, currentEpisode, isPremium]);
+    if (lastPlaybackLogRef.current === key) return;
+    lastPlaybackLogRef.current = key;
+    void fetch('/api/video-access', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ videoId, source, title: videoTitle || title, episodeIndex: currentEpisode, episodeName: episodeName || '', premium: isPremium }),
+    }).catch(() => { /* Logging must never interrupt playback. */ });
+  }, [videoId, source, playUrl, currentEpisode, isPremium, videoTitle, title, episodeName]);
+
   // Get saved progress for this video
   const getSavedProgress = () => {
     // Check for explicit time parameter (from source switch)
@@ -206,6 +218,7 @@ export function VideoPlayer({
           src={finalPlayUrl}
           onError={handleVideoError}
           onTimeUpdate={handleTimeUpdate}
+          onPlaybackStarted={handlePlaybackStarted}
           initialTime={getSavedProgress()}
           shouldAutoPlay={shouldAutoPlay}
           totalEpisodes={totalEpisodes}
