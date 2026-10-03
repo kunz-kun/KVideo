@@ -8,6 +8,7 @@ import { SourceSettings } from '@/components/settings/SourceSettings';
 import { SortSettings } from '@/components/settings/SortSettings';
 import { DataSettings } from '@/components/settings/DataSettings';
 import { AccountSettings } from '@/components/settings/AccountSettings';
+import { VideoAccessLogSettings } from '@/components/settings/VideoAccessLogSettings';
 import { DisplaySettings } from '@/components/settings/DisplaySettings';
 import { PlayerSettings } from '@/components/settings/PlayerSettings';
 import { SettingsHeader } from '@/components/settings/SettingsHeader';
@@ -85,6 +86,7 @@ export default function SettingsPage() {
 
         {/* Account Settings */}
         <AccountSettings />
+        <VideoAccessLogSettings />
 
         {/* Player Settings */}
         <PermissionGate permission="player_settings">

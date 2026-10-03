@@ -59,6 +59,7 @@ interface DesktopVideoPlayerProps {
   poster?: string;
   onError?: (error: string) => void;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
+  onPlaybackStarted?: () => void;
   initialTime?: number;
   shouldAutoPlay?: boolean;
   // Episode navigation props for auto-skip/auto-next
@@ -79,6 +80,7 @@ export function DesktopVideoPlayer({
   poster,
   onError,
   onTimeUpdate,
+  onPlaybackStarted,
   initialTime = 0,
   shouldAutoPlay = false,
   totalEpisodes = 1,
@@ -375,6 +377,7 @@ export function DesktopVideoPlayer({
             playsInline={true} // Crucial for iOS custom fullscreen to work without native player taking over
             controls={false} // Explicitly disable native controls
             onPlay={handlePlay}
+            onPlaying={onPlaybackStarted}
             onPause={handlePause}
             onTimeUpdate={handleTimeUpdateEvent}
             onLoadedMetadata={handleLoadedMetadata}
