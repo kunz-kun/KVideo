@@ -11,12 +11,17 @@ export interface AccessLogDatabase {
 }
 
 export interface VideoAccessStorage {
+  clear(): Promise<void>;
   append(record: VideoAccessRecord): Promise<boolean>;
   query(params: URLSearchParams, now: number): Promise<{ records: VideoAccessRecord[]; total: number; page: number; pageSize: number }>;
 }
 
 export function createD1VideoAccessStorage(db: AccessLogDatabase): VideoAccessStorage {
   return {
+    async clear() {
+      // Retain rate-limit counters so deletion cannot bypass write limits.
+      await db.batch([db.prepare('DELETE FROM video_access_log')]);
+    },
     async append(record) {
       const minute = Math.floor(record.playedAt / 60_000);
       const statements = [

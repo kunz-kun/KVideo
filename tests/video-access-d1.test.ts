@@ -35,6 +35,24 @@ function record(id: string, playedAt: number): VideoAccessRecord {
   return { id, playedAt, videoId: 'v', title: '测试视频', ip: '192.0.2.1', source: 's', episodeIndex: 0, episodeName: '第一集', premium: false };
 }
 
+test('D1 clear removes all logs, preserves rate limits and other data, and allows new events', async () => {
+  const { sqlite, store } = setup();
+  try {
+    const now = Date.now();
+    sqlite.exec("CREATE TABLE unrelated (value TEXT); INSERT INTO unrelated VALUES ('keep')");
+    await store.append(record('first', now));
+    await store.append({ ...record('other', now), ip: '192.0.2.2', title: '其他视频' });
+    await store.clear();
+    assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM video_access_log').get()?.count, 0);
+    assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM video_access_rate').get()?.count, 2);
+    assert.equal(sqlite.prepare('SELECT value FROM unrelated').get()?.value, 'keep');
+    assert.equal((await store.query(new URLSearchParams(), now)).total, 0);
+    await store.clear();
+    assert.equal(await store.append(record('new', now)), true);
+    assert.equal((await store.query(new URLSearchParams(), now)).records[0].id, 'new');
+  } finally { sqlite.close(); }
+});
+
 test('D1 persists metadata, filters and paginates without mixing IPs', async () => {
   const { sqlite, store } = setup();
   try {
