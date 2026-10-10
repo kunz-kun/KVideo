@@ -4,10 +4,17 @@ import type { Redis } from '@upstash/redis/cloudflare';
 import type { AccountInfo, ServerAuthSession } from '@/lib/server/auth';
 import {
   canReadVideoAccessLog, LOG_RETENTION_MS, normalizeIp, parseVideoAccessInput,
-  readCloudflareIp, queryVideoAccessLog, type VideoAccessRecord,
+  readCloudflareIp, queryVideoAccessLog, clearVideoAccessLog, type VideoAccessRecord,
 } from '@/lib/server/video-access-log';
 
 const now = Date.now();
+
+test('Redis clear only deletes the playback log key and propagates failures', async () => {
+  const deleted: string[] = [];
+  await clearVideoAccessLog({ del: async (key: string) => { deleted.push(key); return 1; } } as unknown as Redis);
+  assert.deepEqual(deleted, ['video:access:v1']);
+  await assert.rejects(clearVideoAccessLog({ del: async () => { throw new Error('offline'); } } as unknown as Redis));
+});
 const session: ServerAuthSession = {
   accountId: 'a', profileId: 'a', role: 'admin', name: 'Admin', customPermissions: [], mode: 'managed', iat: now,
 };

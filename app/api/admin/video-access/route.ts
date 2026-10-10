@@ -2,9 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession, listAccountInfo } from '@/lib/server/auth';
 import { getVideoAccessStorage } from '@/lib/server/video-access-runtime';
 import { canReadVideoAccessLog, normalizeIp } from '@/lib/server/video-access-log';
+import { clearVideoAccessRecords } from '@/lib/server/video-access-clear';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
+
+export async function DELETE(request: NextRequest) {
+  return clearVideoAccessRecords(request, {
+    getSession: () => getServerSession(request),
+    listAccounts: listAccountInfo,
+    getStorage: getVideoAccessStorage,
+  });
+}
 
 export async function GET(request: NextRequest) {
   const respond = (body: unknown, status = 200) => NextResponse.json(body, {

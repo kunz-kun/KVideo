@@ -28,6 +28,8 @@ function VideoAccessLogPanel() {
   const [data, setData] = useState<LogPage | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [clearing, setClearing] = useState(false);
+  const [message, setMessage] = useState('');
 
   useEffect(() => {
     const controller = new AbortController();
@@ -45,8 +47,24 @@ function VideoAccessLogPanel() {
   }, [query]);
 
   const load = (page: number, applyFilters = false) => {
+    setMessage('');
     setLoading(true); setError(''); setData(null);
     setQuery(previous => ({ ip: applyFilters ? ip : previous.ip, title: applyFilters ? title : previous.title, page, revision: previous.revision + 1 }));
+  };
+  const clearAll = async () => {
+    if (loading || clearing || !window.confirm('确定清空全部视频播放记录？\n所有 IP、所有片名的记录都会删除，包括筛选结果以外的记录。此操作无法撤销。')) return;
+    setClearing(true); setError(''); setMessage('');
+    try {
+      const response = await fetch('/api/admin/video-access', {
+        method: 'DELETE', headers: { 'X-KVideo-Clear-Logs': 'all' }, cache: 'no-store',
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || '清空失败');
+      load(1);
+      setMessage('历史播放记录已清空。后续播放会继续产生新记录。');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '清空失败');
+    } finally { setClearing(false); }
   };
   const inputClass = 'rounded-lg border border-[var(--glass-border)] bg-[var(--glass-bg)] p-2 text-[var(--text-color)]';
   const buttonClass = 'rounded-lg border border-[var(--glass-border)] px-4 py-2 disabled:opacity-50';
@@ -56,9 +74,11 @@ function VideoAccessLogPanel() {
       <form className="flex flex-wrap gap-3" onSubmit={event => { event.preventDefault(); load(1, true); }}>
         <label className="flex flex-col gap-1">IP 地址<input className={inputClass} value={ip} onChange={event => setIp(event.target.value)} placeholder="完整 IPv4 / IPv6" maxLength={64} /></label>
         <label className="flex flex-col gap-1">片名<input className={inputClass} value={title} onChange={event => setTitle(event.target.value)} placeholder="片名关键词" maxLength={200} /></label>
-        <button className={`${buttonClass} self-end`} type="submit" disabled={loading}>查询 / 刷新</button>
+        <button className={`${buttonClass} self-end`} type="submit" disabled={loading || clearing}>查询 / 刷新</button>
+        <button className={`${buttonClass} self-end text-red-500`} type="button" disabled={loading || clearing || !data} onClick={clearAll}>{clearing ? '正在清空…' : '一键清空全部记录'}</button>
       </form>
       {error ? <p role="alert" className="mt-4 text-red-500">{error}</p> : null}
+      {message ? <p role="status" className="mt-4 text-sm">{message}</p> : null}
       <div role="status" className="mt-4 text-sm">{loading ? '正在读取…' : data ? `共 ${data.total} 条记录` : ''}</div>
       {data ? <>
         <div className="mt-3 overflow-x-auto">
@@ -75,9 +95,9 @@ function VideoAccessLogPanel() {
           {data.records.length === 0 ? <p className="p-4">暂无记录。功能上线后有用户实际开始播放视频时才会产生记录。</p> : null}
         </div>
         <div className="mt-4 flex items-center gap-3">
-          <button className={buttonClass} disabled={loading || query.page <= 1} onClick={() => load(query.page - 1)}>上一页</button>
+          <button className={buttonClass} disabled={loading || clearing || query.page <= 1} onClick={() => load(query.page - 1)}>上一页</button>
           <span>第 {query.page} 页</span>
-          <button className={buttonClass} disabled={loading || query.page * data.pageSize >= data.total} onClick={() => load(query.page + 1)}>下一页</button>
+          <button className={buttonClass} disabled={loading || clearing || query.page * data.pageSize >= data.total} onClick={() => load(query.page + 1)}>下一页</button>
         </div>
       </> : null}
     </SettingsSection>

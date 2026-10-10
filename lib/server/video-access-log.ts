@@ -5,6 +5,10 @@ export const LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const LOG_MAX_RECORDS = 10_000;
 const LOG_KEY = 'video:access:v1';
 
+export async function clearVideoAccessLog(redis: Redis): Promise<void> {
+  await redis.del(LOG_KEY);
+}
+
 export interface VideoAccessInput {
   videoId: string;
   title: string;
