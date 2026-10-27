@@ -108,26 +108,23 @@ export async function fetchSourcesFromUrl(url: string): Promise<ImportResult> {
     };
     const isExternal = url.startsWith('http') && (typeof window !== 'undefined' && !url.includes(window.location.host));
 
-    let response: Response;
-
-    try {
-        response = await fetch(url, { headers });
-    } catch (directError) {
-        if (!isExternal) {
-            throw directError;
+    const fetchAndParse = async (target: string) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12000);
+        try {
+            const response = await fetch(target, { headers, signal: controller.signal, cache: 'no-store' });
+            if (!response.ok) throw new Error(`获取失败: ${response.status}`);
+            return parseSourcesFromJson(await response.text());
+        } finally {
+            clearTimeout(timer);
         }
-
-        response = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, {
-            headers,
-        });
+    };
+    try {
+        return await fetchAndParse(url);
+    } catch (directError) {
+        if (!isExternal) throw directError;
+        return fetchAndParse(`/api/proxy?url=${encodeURIComponent(url)}`);
     }
-
-    if (!response.ok) {
-        throw new Error(`获取失败: ${response.status} ${response.statusText}`);
-    }
-
-    const text = await response.text();
-    return parseSourcesFromJson(text);
 }
 
 /**

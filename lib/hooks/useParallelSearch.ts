@@ -9,6 +9,7 @@ import { useSearchAction } from './useSearchAction';
 
 interface ParallelSearchResult {
   loading: boolean;
+  error: string | null;
   results: Video[];
   availableSources: SourceBadge[];
   completedSources: number;
@@ -31,6 +32,7 @@ export function useParallelSearch(
   const state = useSearchState();
   const {
     loading,
+    error,
     results,
     availableSources,
     completedSources,
@@ -79,6 +81,7 @@ export function useParallelSearch(
 
   return {
     loading,
+    error,
     results,
     availableSources,
     completedSources,
