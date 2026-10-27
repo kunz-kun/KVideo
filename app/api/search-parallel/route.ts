@@ -58,6 +58,7 @@ export async function POST(request: NextRequest) {
 
         let completedSources = 0;
         let totalVideosFound = 0;
+        let failedSources = 0;
 
         const searchPromises = sources.map(async (source: any) => {
           if (signal.aborted) return;
@@ -79,6 +80,7 @@ export async function POST(request: NextRequest) {
             const result = await searchVideos(
               normalizedQuery, [source], 1, sourceController.signal
             );
+            if (result[0]?.error) throw new Error(result[0].error);
             const endTime = performance.now();
             const latency = Math.round(endTime - startTime);
             const videos = result[0]?.results || [];
@@ -161,6 +163,8 @@ export async function POST(request: NextRequest) {
             );
             completedSources++;
 
+            failedSources++;
+
             safeSend({
               type: 'progress',
               completedSources,
@@ -175,7 +179,9 @@ export async function POST(request: NextRequest) {
 
         await Promise.all(searchPromises);
 
-        if (!signal.aborted) {
+        if (!signal.aborted && totalVideosFound === 0 && failedSources > 0) {
+          safeSend({ type: 'error', message: '部分视频源连接失败，暂时无法确认搜索结果，请重试' });
+        } else if (!signal.aborted) {
           safeSend({
             type: 'complete',
             totalVideosFound,
@@ -198,10 +204,14 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  return new Response(stream, {
+  // Buffered fallback avoids incremental fetch delivery issues in some browsers.
+  const body = request.nextUrl.searchParams.get('buffered') === '1'
+    ? await new Response(stream).text()
+    : stream;
+  return new Response(body, {
     headers: {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-store, no-transform',
       'Connection': 'keep-alive',
     },
   });

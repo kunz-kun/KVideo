@@ -3,6 +3,7 @@ import { Video, SourceBadge } from '@/lib/types';
 
 export function useSearchState() {
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
     const [results, setResults] = useState<Video[]>([]);
     const [availableSources, setAvailableSources] = useState<SourceBadge[]>([]);
     const [completedSources, setCompletedSources] = useState(0);
@@ -14,6 +15,7 @@ export function useSearchState() {
     const currentQueryRef = useRef<string>('');
 
     const resetState = useCallback(() => {
+        setError(null);
         setLoading(false);
         setResults([]);
         setAvailableSources([]);
@@ -27,6 +29,7 @@ export function useSearchState() {
     }, []);
 
     const startSearch = useCallback((query: string) => {
+        setError(null);
         setLoading(true);
         setResults([]);
         setAvailableSources([]);
@@ -40,6 +43,8 @@ export function useSearchState() {
     }, []);
 
     return {
+        error,
+        setError,
         loading,
         setLoading,
         results,

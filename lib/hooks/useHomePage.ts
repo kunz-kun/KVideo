@@ -7,7 +7,7 @@ import { settingsStore, type SortOption } from '@/lib/store/settings-store';
 import { userSourcesStore } from '@/lib/store/user-sources-store';
 
 export function useHomePage() {
-    useSubscriptionSync();
+    const { syncing: syncingSources, error: sourceError, refresh: refreshSources } = useSubscriptionSync();
     const router = useRouter();
     const searchParams = useSearchParams();
     const { loadFromCache, saveToCache } = useSearchCache();
@@ -26,6 +26,7 @@ export function useHomePage() {
     // Search stream hook
     const {
         loading,
+        error,
         results,
         availableSources,
         completedSources,
@@ -48,7 +49,7 @@ export function useHomePage() {
         if (!searchQuery.trim()) return false;
 
         const settings = settingsStore.getSettings();
-        const enabledSources = settings.sources.filter(s => s.enabled);
+        const enabledSources = settings.sources.filter(s => s.enabled !== false);
 
         // Merge user personal sources
         const userSources = userSourcesStore.getSources().filter(s => s.enabled !== false);
@@ -90,7 +91,7 @@ export function useHomePage() {
             // Check if we need to re-trigger search due to new sources being loaded
             // This fixes the issue where initial visit has 0 sources, then sources are loaded async
             // but the search (or lack thereof) is already stuck with empty sources.
-            const enabledSources = settings.sources.filter(s => s.enabled);
+            const enabledSources = settings.sources.filter(s => s.enabled !== false);
             const hasSources = enabledSources.length > 0;
 
             // If we have a query, and we haven't searched with sources yet,
@@ -115,15 +116,16 @@ export function useHomePage() {
 
         // Clear scroll position for this search query to ensure we start at the top on a fresh search
         const scrollKey = `scroll-pos:/?q=${encodeURIComponent(searchQuery)}`;
-        sessionStorage.removeItem(scrollKey);
+        try { sessionStorage.removeItem(scrollKey); } catch { /* Storage may be restricted. */ }
 
         // Reset cache load flag for new search
         isInitialCacheLoad.current = false;
 
         setQuery(searchQuery);
         setHasSearched(true);
-        executeSearch(searchQuery);
-    }, [executeSearch]);
+        hasSearchedWithSourcesRef.current = false;
+        if (!executeSearch(searchQuery)) refreshSources();
+    }, [executeSearch, refreshSources]);
 
     // Load cached results on mount
     useEffect(() => {
@@ -163,7 +165,9 @@ export function useHomePage() {
     return {
         query,
         hasSearched,
-        loading,
+        loading: loading || (hasSearched && !hasSearchedWithSourcesRef.current && syncingSources),
+        error: error || (hasSearched && !hasSearchedWithSourcesRef.current && !syncingSources
+            ? sourceError || '暂无可用视频源，请在设置中启用或添加视频源后重试' : null),
         results,
         availableSources,
         completedSources,

@@ -1,108 +1,103 @@
-import { useEffect, useRef } from 'react';
-import { settingsStore } from '@/lib/store/settings-store';
-import { fetchSourcesFromUrl, mergeSources } from '@/lib/utils/source-import-utils';
-import type { SourceSubscription } from '@/lib/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { settingsStore, type AppSettings } from '@/lib/store/settings-store';
+import { fetchSourcesFromUrl, mergeSources, type ImportResult } from '@/lib/utils/source-import-utils';
 
-// Minimum time between syncs for the same subscription (5 minutes)
 const SYNC_COOLDOWN_MS = 5 * 60 * 1000;
-// Delay before initial sync to ensure settings are fully loaded
-const INITIAL_SYNC_DELAY_MS = 1000;
+// PasswordGate and the home page can mount together. Share only in-flight downloads.
+const downloads = new Map<string, Promise<ImportResult>>();
+
+export function mergeSubscriptionDownload(settings: AppSettings, url: string, result: ImportResult, now = Date.now()): AppSettings | null {
+    // Build-time defaults can generate fresh subscription IDs until first saved.
+    // The URL is the stable identity, including across runtime configuration updates.
+    if (!settings.subscriptions.some(item => item.url === url)) return null;
+    return {
+        ...settings,
+        sources: mergeSources(settings.sources, result.normalSources),
+        premiumSources: mergeSources(settings.premiumSources, result.premiumSources),
+        subscriptions: settings.subscriptions.map(item => item.url === url ? { ...item, lastUpdated: now } : item),
+    };
+}
+
+function download(url: string) {
+    let pending = downloads.get(url);
+    if (!pending) {
+        pending = fetchSourcesFromUrl(url).finally(() => downloads.delete(url));
+        downloads.set(url, pending);
+    }
+    return pending;
+}
 
 export function useSubscriptionSync() {
-    // Track if we've already synced during this component lifecycle
-    const hasSyncedRef = useRef(false);
-    // Track if sync is currently in progress to avoid concurrent syncs
-    const isSyncingRef = useRef(false);
+    const [syncing, setSyncing] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const refreshRef = useRef<() => void>(() => {});
+    const refresh = useCallback(() => refreshRef.current(), []);
 
-    // Effect to run sync only once on mount
     useEffect(() => {
-        // Prevent multiple syncs if this effect runs multiple times (React StrictMode)
-        if (hasSyncedRef.current || isSyncingRef.current) return;
+        let mounted = true;
+        let running = false;
+        let pending = false;
+        let forceNext = false;
+        let timer: ReturnType<typeof setTimeout>;
 
         const sync = async () => {
-            // Double-check to prevent race conditions
-            if (hasSyncedRef.current || isSyncingRef.current) return;
-
-            isSyncingRef.current = true;
-
+            if (running) { pending = true; return; }
+            running = true;
+            const settings = settingsStore.getSettings();
+            const force = forceNext;
+            forceNext = false;
+            const hasSources = settings.sources.length + settings.premiumSources.length > 0;
+            const subscriptions = settings.subscriptions.filter(sub =>
+                sub.autoRefresh !== false && (force || !hasSources || !sub.lastUpdated || Date.now() - sub.lastUpdated >= SYNC_COOLDOWN_MS)
+            );
+            if (mounted) { setSyncing(subscriptions.length > 0); setError(null); }
             try {
-                // Read subscriptions directly from store (not via state to avoid re-renders)
-                const settings = settingsStore.getSettings();
-                const activeSubscriptions = settings.subscriptions.filter((s: SourceSubscription) => s.autoRefresh !== false);
-
-                if (activeSubscriptions.length === 0) {
-                    hasSyncedRef.current = true;
-                    return;
-                }
-
-                let anyChanged = false;
-                let currentSources = [...settings.sources];
-                let currentPremiumSources = [...settings.premiumSources];
-                let updatedSubscriptions = [...settings.subscriptions];
-                const now = Date.now();
-
-                // Filter out subscriptions that were synced recently (within cooldown period)
-                const subsToSync = activeSubscriptions.filter(
-                    (sub: SourceSubscription) => !(sub.lastUpdated && now - sub.lastUpdated < SYNC_COOLDOWN_MS)
-                );
-
-                if (subsToSync.length === 0) {
-                    hasSyncedRef.current = true;
-                    return;
-                }
-
-                // Fetch all subscriptions in parallel for better performance
-                const results = await Promise.allSettled(
-                    subsToSync.map((sub: SourceSubscription) => fetchSourcesFromUrl(sub.url))
-                );
-
-                // Process results
+                const results = await Promise.allSettled(subscriptions.map(sub => download(sub.url)));
+                if (!mounted) return;
+                // Merge into the latest settings; a download must not overwrite user edits.
+                let latest = settingsStore.getSettings();
+                let changed = false;
+                let failed = false;
                 results.forEach((result, index) => {
-                    const sub = subsToSync[index];
-                    if (result.status === 'fulfilled') {
-                        const fetchResult = result.value;
-
-                        if (fetchResult.normalSources.length > 0) {
-                            currentSources = mergeSources(currentSources, fetchResult.normalSources);
-                            anyChanged = true;
-                        }
-
-                        if (fetchResult.premiumSources.length > 0) {
-                            currentPremiumSources = mergeSources(currentPremiumSources, fetchResult.premiumSources);
-                            anyChanged = true;
-                        }
-
-                        // Update timestamp for successful sync
-                        const subIdx = updatedSubscriptions.findIndex(s => s.id === sub.id);
-                        if (subIdx !== -1) {
-                            updatedSubscriptions[subIdx] = {
-                                ...updatedSubscriptions[subIdx],
-                                lastUpdated: now
-                            };
-                            anyChanged = true;
-                        }
-                    } else {
-                        console.error(`Failed to sync subscription: ${sub.name}`, result.reason);
-                    }
+                    if (result.status === 'rejected') { failed = true; return; }
+                    if (result.value.totalCount === 0) { failed = true; return; }
+                    const sub = subscriptions[index];
+                    const merged = mergeSubscriptionDownload(latest, sub.url, result.value);
+                    if (!merged) return;
+                    latest = merged;
+                    changed = true;
                 });
-
-                if (anyChanged) {
-                    settingsStore.saveSettings({
-                        ...settings,
-                        sources: currentSources,
-                        premiumSources: currentPremiumSources,
-                        subscriptions: updatedSubscriptions
-                    });
-                }
-
-                hasSyncedRef.current = true;
+                if (changed) settingsStore.saveSettings(latest);
+                if (failed) setError('视频源列表加载失败，请检查网络后重试');
+            } catch {
+                if (mounted) setError('视频源列表加载失败，请重试');
             } finally {
-                isSyncingRef.current = false;
+                running = false;
+                if (mounted) {
+                    setSyncing(false);
+                    if (pending) { pending = false; schedule(); }
+                }
             }
         };
 
-        // Small delay to ensure settings are fully loaded
-        const timeoutId = setTimeout(sync, INITIAL_SYNC_DELAY_MS);
-        return () => clearTimeout(timeoutId);
-    }, []); // Empty dependency array - only run once on mount
+        const schedule = () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => { void sync(); }, 0);
+        };
+        const retry = () => { forceNext = true; schedule(); };
+        refreshRef.current = retry;
+        // Runtime subscriptions may arrive after authentication on a slow device.
+        const unsubscribe = settingsStore.subscribe(schedule);
+        window.addEventListener('online', retry);
+        schedule();
+        return () => {
+            mounted = false;
+            clearTimeout(timer);
+            unsubscribe();
+            window.removeEventListener('online', retry);
+            refreshRef.current = () => {};
+        };
+    }, []);
+
+    return { syncing, error, refresh };
 }

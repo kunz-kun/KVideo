@@ -7,7 +7,7 @@ import { settingsStore } from '@/lib/store/settings-store';
 import { VideoSource } from '@/lib/types';
 
 export function usePremiumHomePage() {
-    useSubscriptionSync();
+    const { syncing: syncingSources, error: sourceError, refresh: refreshSources } = useSubscriptionSync();
     const router = useRouter();
     const searchParams = useSearchParams();
     const { loadFromCache, saveToCache } = useSearchCache();
@@ -28,6 +28,7 @@ export function usePremiumHomePage() {
     // Search stream hook
     const {
         loading,
+        error,
         results,
         availableSources,
         completedSources,
@@ -75,7 +76,7 @@ export function usePremiumHomePage() {
             // but for now we follow the store or keep local state if we want independence.
             // The original hook had local state 'default'.
 
-            const newPremiumSources = settings.premiumSources.filter(s => s.enabled);
+            const newPremiumSources = settings.premiumSources.filter(s => s.enabled !== false);
             setEnabledPremiumSources(newPremiumSources);
 
             // Check if we need to re-trigger search due to new sources being loaded
@@ -110,7 +111,7 @@ export function usePremiumHomePage() {
             // We need to wait for sources to be available, which is handled by the subscription effect
             // But if sources are already available (e.g. navigation), execute immediately
             const currentSettings = settingsStore.getSettings();
-            const currentSources = currentSettings.premiumSources.filter(s => s.enabled);
+            const currentSources = currentSettings.premiumSources.filter(s => s.enabled !== false);
 
             if (currentSources.length > 0) {
                 handleSearch(urlQuery);
@@ -123,7 +124,8 @@ export function usePremiumHomePage() {
         setQuery(searchQuery);
         setHasSearched(true);
         // Use current state of sources
-        executeSearch(searchQuery, enabledPremiumSources);
+        hasSearchedWithSourcesRef.current = false;
+        if (!executeSearch(searchQuery, enabledPremiumSources)) refreshSources();
     };
 
     const handleReset = () => {
@@ -137,7 +139,9 @@ export function usePremiumHomePage() {
     return {
         query,
         hasSearched,
-        loading,
+        loading: loading || (hasSearched && !hasSearchedWithSourcesRef.current && syncingSources),
+        error: error || (hasSearched && !hasSearchedWithSourcesRef.current && !syncingSources
+            ? sourceError || '暂无可用视频源，请在设置中启用或添加视频源后重试' : null),
         results,
         availableSources,
         completedSources,

@@ -6,13 +6,15 @@ import { settingsStore } from '@/lib/store/settings-store';
 /**
  * Check if a video's category matches any blocked keyword.
  */
-function isCategoryBlocked(video: any, blockedCategories: string[]): boolean {
+type SearchVideo = Video & { vod_class?: string; sourceDisplayName?: string };
+
+function isCategoryBlocked(video: SearchVideo, blockedCategories: string[]): boolean {
     if (blockedCategories.length === 0) return false;
     const typeName = (video.type_name || video.vod_class || '').toLowerCase();
     return blockedCategories.some(cat => typeName.includes(cat.toLowerCase()));
 }
 
-interface StreamHandlerParams {
+export interface StreamHandlerParams {
     reader: ReadableStreamDefaultReader<Uint8Array>;
     onStart: (totalSources: number) => void;
     onVideos: (videos: Video[], source: string) => void;
@@ -39,12 +41,45 @@ export async function processSearchStream({
 
     const blockedCategories = settingsStore.getSettings().blockedCategories;
 
-    while (true) {
+    const processLine = (line: string) => {
+            if (!line.startsWith('data:')) return;
+
+            const data = JSON.parse(line.slice(5).trim());
+
+            if (data.type === 'start') {
+                onStart(data.totalSources);
+            } else if (data.type === 'videos') {
+                const newVideos: Video[] = data.videos
+                    .filter((video: SearchVideo) => hasMinimumMatch(video.vod_name, currentQuery))
+                    .filter((video: SearchVideo) => !isCategoryBlocked(video, blockedCategories))
+                    .map((video: SearchVideo) => ({
+                        ...video,
+                        sourceName: video.sourceDisplayName || getSourceName(video.source),
+                        isNew: true,
+                        relevanceScore: calculateRelevanceScore(video, currentQuery),
+                    }));
+                onVideos(newVideos, data.source);
+                if (data.pagecount && onPageInfo) onPageInfo(data.pagecount);
+            } else if (data.type === 'progress') {
+                onProgress(data.completedSources, data.totalVideosFound);
+            } else if (data.type === 'complete') {
+                isCompleted = true;
+                if (data.maxPageCount && onPageInfo) onPageInfo(data.maxPageCount);
+                onComplete();
+            } else if (data.type === 'error') {
+                isCompleted = true;
+                onError(data.message);
+            }
+    };
+
+    try {
+      while (!isCompleted) {
         const { done, value } = await reader.read();
         if (done) {
+            buffer += decoder.decode();
+            if (buffer.trim()) processLine(buffer);
             if (!isCompleted) {
-                isCompleted = true;
-                onComplete();
+                throw new Error('搜索连接中断，请重试');
             }
             break;
         }
@@ -54,46 +89,12 @@ export async function processSearchStream({
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-
-            try {
-                const data = JSON.parse(line.slice(6));
-
-                if (data.type === 'start') {
-                    onStart(data.totalSources);
-                } else if (data.type === 'videos') {
-                    const newVideos: Video[] = data.videos
-                        .filter((video: any) => hasMinimumMatch(video.vod_name, currentQuery))
-                        .filter((video: any) => !isCategoryBlocked(video, blockedCategories))
-                        .map((video: any) => ({
-                            ...video,
-                            sourceName: video.sourceDisplayName || getSourceName(video.source),
-                            isNew: true,
-                            relevanceScore: calculateRelevanceScore(video, currentQuery),
-                        }));
-                    onVideos(newVideos, data.source);
-                    if (data.pagecount && onPageInfo) {
-                        onPageInfo(data.pagecount);
-                    }
-                } else if (data.type === 'progress') {
-                    onProgress(data.completedSources, data.totalVideosFound);
-                } else if (data.type === 'complete') {
-                    if (!isCompleted) {
-                        isCompleted = true;
-                        if (data.maxPageCount && onPageInfo) {
-                            onPageInfo(data.maxPageCount);
-                        }
-                        onComplete();
-                    }
-                } else if (data.type === 'error') {
-                    if (!isCompleted) {
-                        isCompleted = true;
-                        onError(data.message);
-                    }
-                }
-            } catch (error) {
-                console.error('Error parsing stream data:', error);
-            }
+            processLine(line);
+            if (isCompleted) break;
         }
+      }
+    } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
     }
 }

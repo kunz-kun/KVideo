@@ -1,7 +1,8 @@
 import { useRef, useCallback } from 'react';
 import { sortVideos } from '@/lib/utils/sort';
 import { binaryInsertVideos } from '@/lib/utils/sorted-insert';
-import { processSearchStream } from '@/lib/utils/search-stream';
+import { requestSearch } from '@/lib/utils/search-request';
+import type { Video, VideoSource, SourceBadge } from '@/lib/types';
 import type { SortOption } from '@/lib/store/settings-store';
 import { settingsStore } from '@/lib/store/settings-store';
 import { useSearchState } from './useSearchState';
@@ -11,13 +12,14 @@ type SearchSourceConfig = { id: string; baseUrl?: string };
 
 interface UseSearchActionProps {
     state: SearchState;
-    onCacheUpdate: (query: string, results: any[], sources: any[]) => void;
+    onCacheUpdate: (query: string, results: Video[], sources: SourceBadge[]) => void;
     onUrlUpdate: (query: string) => void;
 }
 
 export function useSearchAction({ state, onCacheUpdate, onUrlUpdate }: UseSearchActionProps) {
     const {
         setLoading,
+        setError,
         setResults,
         setAvailableSources,
         setCompletedSources,
@@ -33,26 +35,25 @@ export function useSearchAction({ state, onCacheUpdate, onUrlUpdate }: UseSearch
 
     const abortControllerRef = useRef<AbortController | null>(null);
     // Keep track of the last search params so loadMore can re-use them
-    const lastSearchParamsRef = useRef<{ query: string; sources: any[]; sortBy: SortOption } | null>(null);
+    const lastSearchParamsRef = useRef<{ query: string; sources: VideoSource[]; sortBy: SortOption } | null>(null);
 
-    const performSearch = useCallback(async (searchQuery: string, sources: any[] = [], sortBy: SortOption = 'default') => {
+    const performSearch = useCallback(async (searchQuery: string, sources: VideoSource[] = [], sortBy: SortOption = 'default') => {
         if (!searchQuery.trim()) return;
 
         // Resolve sources if not provided
         let targetSources = sources;
         if (!targetSources || targetSources.length === 0) {
             const settings = settingsStore.getSettings();
-            targetSources = [
-                ...settings.sources,
-                ...settings.subscriptions.filter(s => (s as any).enabled !== false), // Include valid subscriptions
-            ].filter(s => (s as any).enabled !== false);
+            targetSources = settings.sources.filter(source => source.enabled !== false);
         }
 
         // Abort any ongoing search
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
-        abortControllerRef.current = new AbortController();
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+        const isCurrent = () => abortControllerRef.current === controller && !controller.signal.aborted;
 
         // Reset state
         startSearch(searchQuery.trim());
@@ -64,28 +65,20 @@ export function useSearchAction({ state, onCacheUpdate, onUrlUpdate }: UseSearch
         onUrlUpdate(searchQuery);
 
         try {
-            const response = await fetch('/api/search-parallel', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: searchQuery, sources: targetSources, page: 1 }),
-                signal: abortControllerRef.current.signal,
-            });
-
-            if (!response.ok) throw new Error('Search failed');
-
-            const reader = response.body?.getReader();
-            if (!reader) throw new Error('No response stream');
-
             const sourceConfigs = new Map<string, SearchSourceConfig>(
                 targetSources.map((source: SearchSourceConfig) => [source.id, source])
             );
             const sourcesMap = new Map<string, { count: number; name: string; baseUrl?: string }>();
+            const receivedVideos: Video[] = [];
 
-            await processSearchStream({
-                reader,
+            await requestSearch({
+                sources: targetSources,
+                signal: controller.signal,
                 currentQuery: searchQuery.trim(),
-                onStart: (total) => setTotalSources(total),
+                onStart: (total) => { if (isCurrent()) setTotalSources(total); },
                 onVideos: (newVideos, sourceId) => {
+                    if (!isCurrent()) return;
+                    receivedVideos.push(...newVideos);
                     // Optimized: Insert new videos in sorted position
                     setResults((prev) => binaryInsertVideos(prev, newVideos));
 
@@ -102,13 +95,16 @@ export function useSearchAction({ state, onCacheUpdate, onUrlUpdate }: UseSearch
                     }
                 },
                 onProgress: (completed, found) => {
+                    if (!isCurrent()) return;
                     setCompletedSources(completed);
                     setTotalVideosFound(found);
                 },
                 onPageInfo: (pageCount) => {
+                    if (!isCurrent()) return;
                     setMaxPageCount((prev) => Math.max(prev, pageCount));
                 },
                 onComplete: () => {
+                    if (!isCurrent()) return;
                     setLoading(false);
 
                     // Update available sources with correct property names
@@ -121,24 +117,20 @@ export function useSearchAction({ state, onCacheUpdate, onUrlUpdate }: UseSearch
                     setAvailableSources(sources);
 
                     // Apply final sorting after all results are received
-                    setResults((currentResults) => {
-                        const sorted = sortVideos(currentResults, sortBy);
-
-                        // Cache results
-                        setTimeout(() => {
-                            onCacheUpdate(searchQuery, sorted, sources);
-                        }, 100);
-
-                        return sorted;
-                    });
+                    const sorted = sortVideos(receivedVideos, sortBy);
+                    setResults(sorted);
+                    onCacheUpdate(searchQuery.trim(), sorted, sources);
                 },
                 onError: (message) => {
+                    if (!isCurrent()) return;
                     console.error('Search error:', message);
+                    setError(message);
                     setLoading(false);
                 },
             });
 
         } catch (error) {
+            if (!isCurrent()) return;
             if (error instanceof Error && error.name === 'AbortError') {
                 // Ignore abort errors and DO NOT set loading to false
                 // because a new search might have already started
@@ -146,9 +138,10 @@ export function useSearchAction({ state, onCacheUpdate, onUrlUpdate }: UseSearch
             } else {
                 console.error('Search error:', error);
             }
+            setError('搜索连接失败，请检查网络后重试');
             setLoading(false);
         }
-    }, [startSearch, onUrlUpdate, onCacheUpdate, setTotalSources, setResults, setCompletedSources, setTotalVideosFound, setLoading, setAvailableSources, setMaxPageCount]);
+    }, [startSearch, onUrlUpdate, onCacheUpdate, setTotalSources, setResults, setCompletedSources, setTotalVideosFound, setLoading, setError, setAvailableSources, setMaxPageCount]);
 
     const loadMore = useCallback(async () => {
         const params = lastSearchParamsRef.current;
@@ -161,48 +154,46 @@ export function useSearchAction({ state, onCacheUpdate, onUrlUpdate }: UseSearch
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
-        abortControllerRef.current = new AbortController();
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+        const isCurrent = () => abortControllerRef.current === controller && !controller.signal.aborted;
 
         setLoadingMore(true);
 
         try {
-            const response = await fetch('/api/search-parallel', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: params.query, sources: params.sources, page: nextPage }),
-                signal: abortControllerRef.current.signal,
-            });
-
-            if (!response.ok) throw new Error('Load more failed');
-
-            const reader = response.body?.getReader();
-            if (!reader) throw new Error('No response stream');
-
-            await processSearchStream({
-                reader,
+            await requestSearch({
+                sources: params.sources,
+                page: nextPage,
+                signal: controller.signal,
                 currentQuery: params.query,
                 onStart: () => { },
                 onVideos: (newVideos) => {
+                    if (!isCurrent()) return;
                     // Append new videos to existing results
                     setResults((prev) => binaryInsertVideos(prev, newVideos));
                 },
                 onProgress: (_, found) => {
+                    if (!isCurrent()) return;
                     setTotalVideosFound((prev) => prev + found);
                 },
                 onPageInfo: (pageCount) => {
+                    if (!isCurrent()) return;
                     setMaxPageCount((prev) => Math.max(prev, pageCount));
                 },
                 onComplete: () => {
+                    if (!isCurrent()) return;
                     setCurrentPage(nextPage);
                     setLoadingMore(false);
                 },
                 onError: (message) => {
+                    if (!isCurrent()) return;
                     console.error('Load more error:', message);
                     setLoadingMore(false);
                 },
             });
 
         } catch (error) {
+            if (!isCurrent()) return;
             if (error instanceof Error && error.name === 'AbortError') {
                 return;
             }
@@ -215,7 +206,9 @@ export function useSearchAction({ state, onCacheUpdate, onUrlUpdate }: UseSearch
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
-    }, []);
+        setLoading(false);
+        setLoadingMore(false);
+    }, [setLoading, setLoadingMore]);
 
     return { performSearch, loadMore, cancelSearch };
 }

@@ -15,6 +15,7 @@ function PremiumHomePage() {
         query,
         hasSearched,
         loading,
+        error,
         results,
         availableSources,
         completedSources,
@@ -62,7 +63,7 @@ function PremiumHomePage() {
 
                 {/* No Results */}
                 {!loading && hasSearched && results.length === 0 && (
-                    <NoResults onReset={handleReset} />
+                    <NoResults onReset={handleReset} error={error} onRetry={() => handleSearch(query)} />
                 )}
 
                 {/* Premium Content - Trending and Latest */}

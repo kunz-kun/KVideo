@@ -15,6 +15,7 @@ function HomePage() {
     query,
     hasSearched,
     loading,
+    error,
     results,
     availableSources,
     completedSources,
@@ -80,7 +81,7 @@ function HomePage() {
 
         {/* No Results */}
         {!loading && hasSearched && results.length === 0 && (
-          <NoResults onReset={handleReset} />
+          <NoResults onReset={handleReset} error={error} onRetry={() => handleSearch(query)} />
         )}
       </main>
 
