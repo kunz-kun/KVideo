@@ -6,6 +6,9 @@ import { requestSearch } from '@/lib/utils/search-request';
 import { POST } from '@/app/api/search-parallel/route';
 import { fetchSourcesFromUrl } from '@/lib/utils/source-import-utils';
 import { readSourceSubscription } from '@/lib/server/source-subscription';
+import { mergeSubscriptionDownload } from '@/lib/hooks/useSubscriptionSync';
+import { settingsStore } from '@/lib/store/settings-store';
+import { parseSourcesFromJson } from '@/lib/utils/source-import-utils';
 
 const event = (data: object) => `data: ${JSON.stringify(data)}\r\n\r\n`;
 const start = event({ type: 'start', totalSources: 1 });
@@ -181,4 +184,15 @@ test('subscription endpoint rejects non-JSON, invalid source lists and oversized
         assert.equal(response.status, 502);
         assert.equal((await response.json()).sources, undefined);
     }
+});
+
+test('first-visit subscription downloads survive regenerated default IDs without restoring removed subscriptions', () => {
+    const url = 'https://subscription.example/list.json';
+    const latest = { ...settingsStore.getSettings(), subscriptions: [{ id: 'new-default-id', name: '站点订阅', url, autoRefresh: true, lastUpdated: 0 }] };
+    const parsed = parseSourcesFromJson(JSON.stringify([{ id: 'test', name: '测试源', baseUrl: 'https://source.example' }]));
+    const merged = mergeSubscriptionDownload(latest, url, parsed, 123);
+    assert.equal(merged?.sources.length, latest.sources.length + 1);
+    assert.equal(merged?.subscriptions[0].id, 'new-default-id');
+    assert.equal(merged?.subscriptions[0].lastUpdated, 123);
+    assert.equal(mergeSubscriptionDownload({ ...latest, subscriptions: [] }, url, parsed), null);
 });

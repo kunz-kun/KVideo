@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { settingsStore } from '@/lib/store/settings-store';
+import { settingsStore, type AppSettings } from '@/lib/store/settings-store';
 import { fetchSourcesFromUrl, mergeSources, type ImportResult } from '@/lib/utils/source-import-utils';
 
 const SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 // PasswordGate and the home page can mount together. Share only in-flight downloads.
 const downloads = new Map<string, Promise<ImportResult>>();
+
+export function mergeSubscriptionDownload(settings: AppSettings, url: string, result: ImportResult, now = Date.now()): AppSettings | null {
+    // Build-time defaults can generate fresh subscription IDs until first saved.
+    // The URL is the stable identity, including across runtime configuration updates.
+    if (!settings.subscriptions.some(item => item.url === url)) return null;
+    return {
+        ...settings,
+        sources: mergeSources(settings.sources, result.normalSources),
+        premiumSources: mergeSources(settings.premiumSources, result.premiumSources),
+        subscriptions: settings.subscriptions.map(item => item.url === url ? { ...item, lastUpdated: now } : item),
+    };
+}
 
 function download(url: string) {
     let pending = downloads.get(url);
@@ -43,23 +55,19 @@ export function useSubscriptionSync() {
                 const results = await Promise.allSettled(subscriptions.map(sub => download(sub.url)));
                 if (!mounted) return;
                 // Merge into the latest settings; a download must not overwrite user edits.
-                const latest = settingsStore.getSettings();
-                let normal = latest.sources;
-                let premium = latest.premiumSources;
-                let updated = latest.subscriptions;
+                let latest = settingsStore.getSettings();
                 let changed = false;
                 let failed = false;
                 results.forEach((result, index) => {
                     if (result.status === 'rejected') { failed = true; return; }
                     if (result.value.totalCount === 0) { failed = true; return; }
                     const sub = subscriptions[index];
-                    if (!updated.some(item => item.id === sub.id && item.url === sub.url)) return;
-                    normal = mergeSources(normal, result.value.normalSources);
-                    premium = mergeSources(premium, result.value.premiumSources);
-                    updated = updated.map(item => item.id === sub.id ? { ...item, lastUpdated: Date.now() } : item);
+                    const merged = mergeSubscriptionDownload(latest, sub.url, result.value);
+                    if (!merged) return;
+                    latest = merged;
                     changed = true;
                 });
-                if (changed) settingsStore.saveSettings({ ...latest, sources: normal, premiumSources: premium, subscriptions: updated });
+                if (changed) settingsStore.saveSettings(latest);
                 if (failed) setError('视频源列表加载失败，请检查网络后重试');
             } catch {
                 if (mounted) setError('视频源列表加载失败，请重试');
