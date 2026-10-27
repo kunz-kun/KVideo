@@ -5,6 +5,7 @@ import { processSearchStream, type StreamHandlerParams } from '@/lib/utils/searc
 import { requestSearch } from '@/lib/utils/search-request';
 import { POST } from '@/app/api/search-parallel/route';
 import { fetchSourcesFromUrl } from '@/lib/utils/source-import-utils';
+import { readSourceSubscription } from '@/lib/server/source-subscription';
 
 const event = (data: object) => `data: ${JSON.stringify(data)}\r\n\r\n`;
 const start = event({ type: 'start', totalSources: 1 });
@@ -149,11 +150,35 @@ test('subscription HTTP and parsing failures fall back to the same-origin proxy'
             };
             const result = await fetchSourcesFromUrl('https://subscription.example/list.json');
             assert.equal(result.normalSources.length, 1);
-            assert.deepEqual(urls, ['https://subscription.example/list.json', '/api/proxy?url=https%3A%2F%2Fsubscription.example%2Flist.json']);
+            assert.deepEqual(urls, ['https://subscription.example/list.json', '/api/source-subscription?url=https%3A%2F%2Fsubscription.example%2Flist.json']);
         }
     } finally {
         globalThis.fetch = originalFetch;
         if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
         else Reflect.deleteProperty(globalThis, 'window');
+    }
+});
+
+test('subscription endpoint only returns parsed configured source JSON', async () => {
+    const url = 'https://subscription.example/list.json';
+    const request = () => new Request(`https://example.com/api/source-subscription?url=${encodeURIComponent(url)}`);
+    const fetcher: typeof fetch = async () => Response.json([{ id: 'test', name: '测试源', baseUrl: 'https://source.example', unrelated: 'discard' }]);
+    for (const config of [url, JSON.stringify([{ name: '站点订阅', url }])]) {
+        const response = await readSourceSubscription(request(), config, fetcher);
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).sources[0].unrelated, undefined);
+    }
+    let fetched = false;
+    const response = await readSourceSubscription(request(), 'https://different.example/list.json', async () => { fetched = true; return new Response(); });
+    assert.equal(response.status, 403);
+    assert.equal(fetched, false);
+});
+
+test('subscription endpoint rejects non-JSON, invalid source lists and oversized payloads', async () => {
+    const url = 'https://subscription.example/list.json';
+    for (const body of ['#EXTM3U\nhttps://video.example/test.ts', '[]', 'x'.repeat(1024 * 1024 + 1)]) {
+        const response = await readSourceSubscription(new Request(`https://example.com/api/source-subscription?url=${encodeURIComponent(url)}`), url, async () => new Response(body));
+        assert.equal(response.status, 502);
+        assert.equal((await response.json()).sources, undefined);
     }
 });

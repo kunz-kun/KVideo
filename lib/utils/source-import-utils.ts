@@ -123,7 +123,7 @@ export async function fetchSourcesFromUrl(url: string): Promise<ImportResult> {
         return await fetchAndParse(url);
     } catch (directError) {
         if (!isExternal) throw directError;
-        return fetchAndParse(`/api/proxy?url=${encodeURIComponent(url)}`);
+        return fetchAndParse(`/api/source-subscription?url=${encodeURIComponent(url)}`);
     }
 }
 
