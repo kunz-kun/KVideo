@@ -10,7 +10,7 @@ import { searchVideos } from '@/lib/api/client';
 import { getSourceName } from '@/lib/utils/source-names';
 import { traditionalToSimplified } from '@/lib/utils/chinese-convert';
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
 
 const MAX_TOTAL_VIDEOS = 2000;
 const MAX_PAGES_PER_SOURCE = 3;
